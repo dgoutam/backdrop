@@ -3120,6 +3120,9 @@ function backdrop_add_css($data = NULL, $options = NULL) {
     // Always add a tiny value to the weight, to conserve the insertion order.
     $options['weight'] += count($css) / 1000;
 
+    // Add an every page weight for sorting.
+    $options['every_page_weight'] = $options['every_page'] ? -1 : 1;
+
     // Add the data to the CSS array depending on the type.
     switch ($options['type']) {
       case 'inline':
@@ -3173,7 +3176,11 @@ function backdrop_get_css($css = NULL, $skip_alter = FALSE) {
   }
 
   // Sort CSS items, so that they appear in the correct order.
-  uasort($css, 'backdrop_sort_css_js');
+  backdrop_sort($css, array(
+    'group' => 'numeric',
+    'every_page_weight' => 'numeric',
+    'weight' => 'numeric',
+  ));
 
   // Provide the page with information about the individual CSS files used,
   // information not otherwise available when CSS aggregation is enabled. The
@@ -3211,59 +3218,6 @@ function backdrop_get_css($css = NULL, $skip_alter = FALSE) {
   }
 
   return backdrop_render($styles);
-}
-
-/**
- * Sorts CSS and JavaScript resources.
- *
- * Callback for uasort() within:
- * - backdrop_get_css()
- * - backdrop_get_js()
- *
- * This sort order helps optimize front-end performance while providing modules
- * and themes with the necessary control for ordering the CSS and JavaScript
- * appearing on a page.
- *
- * @param $a
- *   First item for comparison. The compared items should be associative arrays
- *   of member items from backdrop_add_css() or backdrop_add_js().
- * @param $b
- *   Second item for comparison.
- *
- * @see backdrop_add_css()
- * @see backdrop_add_js()
- */
-function backdrop_sort_css_js($a, $b) {
-  // First order by group, so that, for example, all items in the CSS_SYSTEM
-  // group appear before items in the CSS_DEFAULT group, which appear before
-  // all items in the CSS_THEME group. Modules may create additional groups by
-  // defining their own constants.
-  if ($a['group'] < $b['group']) {
-    return -1;
-  }
-  elseif ($a['group'] > $b['group']) {
-    return 1;
-  }
-  // Within a group, order all infrequently needed, page-specific files after
-  // common files needed throughout the website. Separating this way allows for
-  // the aggregate file generated for all of the common files to be reused
-  // across a site visit without being cut by a page using a less common file.
-  elseif ($a['every_page'] && !$b['every_page']) {
-    return -1;
-  }
-  elseif (!$a['every_page'] && $b['every_page']) {
-    return 1;
-  }
-  // Finally, order by weight.
-  elseif ($a['weight'] < $b['weight']) {
-    return -1;
-  }
-  elseif ($a['weight'] > $b['weight']) {
-    return 1;
-  }
-  else {
-    return 0;
-  }
 }
 
 /**
@@ -4264,6 +4218,9 @@ function backdrop_add_js($data = NULL, $options = NULL) {
   // order of the calls to backdrop_add_js().
   $options['weight'] += count($javascript) / 1000;
 
+  // Add an every page weight for sorting.
+  $options['every_page_weight'] = $options['every_page'] ? -1 : 1;
+
   if (isset($data)) {
     // Add jquery.js and backdrop.js, as well as the basePath setting, the
     // first time a JavaScript file is added.
@@ -4409,7 +4366,11 @@ function backdrop_get_js($scope = 'header', $javascript = NULL, $skip_alter = FA
   }
 
   // Sort the JavaScript so that it appears in the correct order.
-  uasort($items, 'backdrop_sort_css_js');
+  backdrop_sort($items, array(
+    'group' => 'numeric',
+    'every_page_weight' => 'numeric',
+    'weight' => 'numeric',
+  ));
 
   // Provide the page with information about the individual JavaScript files
   // used, information not otherwise available when aggregation is enabled.
@@ -6131,7 +6092,7 @@ function backdrop_render_page($page) {
  *
  * This function is usually called from within another function, like
  * backdrop_get_form() or a theme function. Elements are sorted internally
- * using uasort(). Since this is expensive, when passing already sorted
+ * using backdrop_sort(). Since this is expensive, when passing already sorted
  * elements to backdrop_render(), for example from a database query, set
  * $elements['#sorted'] = TRUE to avoid sorting them a second time.
  *
@@ -6592,45 +6553,6 @@ function backdrop_render_cid_create($elements) {
 }
 
 /**
- * Sorts a structured array by '#weight' property.
- *
- * Callback for uasort() within element_children().
- *
- * @param $a
- *   First item for comparison. The compared items should be associative arrays
- *   that optionally include a '#weight' key.
- * @param $b
- *   Second item for comparison.
- */
-function element_sort($a, $b) {
-  $a_weight = (is_array($a) && isset($a['#weight'])) ? $a['#weight'] : 0;
-  $b_weight = (is_array($b) && isset($b['#weight'])) ? $b['#weight'] : 0;
-  if ($a_weight == $b_weight) {
-    return 0;
-  }
-  return ($a_weight < $b_weight) ? -1 : 1;
-}
-
-/**
- * Sorts a structured array by '#title' property.
- *
- * Callback for uasort() within:
- * - system_modules()
- * - theme_simpletest_test_table()
- *
- * @param $a
- *   First item for comparison. The compared items should be associative arrays
- *   that optionally include a '#title' key.
- * @param $b
- *   Second item for comparison.
- */
-function element_sort_by_title($a, $b) {
-  $a_title = (is_array($a) && isset($a['#title'])) ? $a['#title'] : '';
-  $b_title = (is_array($b) && isset($b['#title'])) ? $b['#title'] : '';
-  return strnatcasecmp($a_title, $b_title);
-}
-
-/**
  * Retrieves the default properties for the defined element type.
  *
  * @param $type
@@ -6672,49 +6594,85 @@ function element_info_property($type, $property_name, $default = NULL) {
 }
 
 /**
- * Sorts a structured array by 'weight' key (no # prefix).
+ * Sort an array based on user-provided keys within that array.
  *
- * Callback for uasort() within:
- * - _field_ui_reduce_order()
- * - update_resolve_dependencies()
- * - archiver_get_info()
- * - backdrop_get_updaters()
- * - backdrop_get_filetransfer_info()
- *
- * @param $a
- *   First item for comparison. The compared items should be associative arrays
- *   that optionally include a 'weight' key.
- * @param $b
- *   Second item for comparison.
+ * @param array $array
+ *   The input array to be sorted.
+ * @param array $keys
+ *   An array of keys on which to be sort. Each key should indicate how
+ *   comparisons should be done, either "numeric" or "string".
  */
-function backdrop_sort_weight($a, $b) {
-  $a_weight = (is_array($a) && isset($a['weight'])) ? $a['weight'] : 0;
-  $b_weight = (is_array($b) && isset($b['weight'])) ? $b['weight'] : 0;
-  if ($a_weight == $b_weight) {
-    return 0;
+function backdrop_sort(array &$array, array $keys = array('weight' => 'numeric')) {
+  // If sorting on a single value, optimize the sorting to sort only on that
+  // specific key without the overhead of recursive handling.
+  if (count($keys) === 1) {
+    $key = key($keys);
+    $key_sort = reset($keys);
+    // String comparisons assume that every value is always specified.
+    if ($key_sort === 'string') {
+      uasort($array, function($a, $b) use ($key) {
+        if (!is_array($a) || !is_array($b)) {
+          return 0;
+        }
+        if (!isset($a[$key])) {
+          $a[$key] = '';
+        }
+        if (!isset($b[$key])) {
+          $b[$key] = '';
+        }
+        return strnatcasecmp($a[$key], $b[$key]);
+      });
+    }
+    // Numeric comparisons provide defaults, for things like weights that will
+    // often be zero.
+    else {
+      uasort($array, function($a, $b) use ($key) {
+        if (!is_array($a) || !is_array($b)) {
+          return 0;
+        }
+        if (!isset($a[$key])) {
+          $a[$key] = 0;
+        }
+        if (!isset($b[$key])) {
+          $b[$key] = 0;
+        }
+        if ($a[$key] != $b[$key]) {
+          return $a[$key] < $b[$key] ? -1 : 1;
+        }
+      });
+    }
   }
-  return ($a_weight < $b_weight) ? -1 : 1;
-}
-
-/**
- * Sorts a structured array by 'title' key (no # prefix).
- *
- * Callback for uasort() within system_admin_index().
- *
- * @param $a
- *   First item for comparison. The compared items should be associative arrays
- *   that optionally include a 'title' key.
- * @param $b
- *   Second item for comparison.
- */
-function backdrop_sort_title($a, $b) {
-  if (!isset($b['title'])) {
-    return -1;
+  // If doing a multiple-key comparison, use a recursive callback.
+  else {
+    $keys_map = array_keys($keys);
+    $recursive_callback = function ($a, $b, $key_index = 0) use ($keys, $keys_map, &$recursive_callback) {
+      $key = $keys_map[$key_index];
+      if (!is_array($a) || !is_array($b)) {
+        return 0;
+      }
+      if (!isset($a[$key])) {
+        $a[$key] = 0;
+      }
+      if (!isset($b[$key])) {
+        $b[$key] = 0;
+      }
+      if ($a[$key] == $b[$key]) {
+        // Sort on the next key if one exists.
+        if (isset($keys_map[$key_index + 1])) {
+          return $recursive_callback($a, $b, $key_index + 1);
+        }
+      }
+      else {
+        if ($keys[$key] === 'string') {
+          return strnatcasecmp($a[$key], $b[$key]);
+        }
+        else {
+          return ($a[$key] < $b[$key]) ? -1 : 1;
+        }
+      }
+    };
+    uasort($array, $recursive_callback);
   }
-  if (!isset($a['title'])) {
-    return 1;
-  }
-  return strcasecmp($a['title'], $b['title']);
 }
 
 /**
@@ -6776,7 +6734,7 @@ function element_children(&$elements, $sort = FALSE) {
   }
   // Sort the children if necessary.
   if ($sort && $sortable) {
-    uasort($children, 'element_sort');
+    backdrop_sort($children, array('#weight' => 'numeric'));
     // Put the sorted children back into $elements in the correct order, to
     // preserve sorting if the same element is passed through
     // element_children() twice.
@@ -8089,7 +8047,7 @@ function archiver_get_info() {
       // Rebuild the cache and save it.
       $archiver_info = module_invoke_all('archiver_info');
       backdrop_alter('archiver_info', $archiver_info);
-      uasort($archiver_info, 'backdrop_sort_weight');
+      backdrop_sort($archiver_info, array('weight' => 'numeric'));
       cache()->set('archiver_info', $archiver_info);
     }
     else {
@@ -8173,7 +8131,7 @@ function backdrop_get_updaters() {
   if (!isset($updaters)) {
     $updaters = module_invoke_all('updater_info');
     backdrop_alter('updater_info', $updaters);
-    uasort($updaters, 'backdrop_sort_weight');
+    backdrop_sort($updaters, array('weight' => 'numeric'));
   }
   return $updaters;
 }
@@ -8207,7 +8165,7 @@ function backdrop_get_filetransfer_info() {
       }
     }
     backdrop_alter('filetransfer_info', $info);
-    uasort($info, 'backdrop_sort_weight');
+    backdrop_sort($info, array('weight' => 'string'));
   }
   return $info;
 }
